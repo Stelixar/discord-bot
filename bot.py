@@ -5,9 +5,8 @@ import os
 
 intents = discord.Intents.all()
 
-# Store auto-chat channel
+# Store auto-chat channel (consider using a database for persistence across restarts)
 AI_CHANNEL = None
-
 
 # ======================
 # CUSTOM BOT CLASS
@@ -26,9 +25,7 @@ class MyBot(commands.Bot):
     async def on_ready(self):
         print(f"Bot is online as {self.user}")
 
-
 bot = MyBot()
-
 
 # ======================
 # TAG RESPONSE + AUTOCHAT
@@ -52,7 +49,6 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-
 # ======================
 # SLASH COMMANDS
 # ======================
@@ -64,15 +60,14 @@ async def ping(interaction: discord.Interaction):
         f"Pong! `{round(bot.latency * 1000)}ms`"
     )
 
-
 # /avatar
 @bot.tree.command(name="avatar", description="Show a user's avatar")
 async def avatar(interaction: discord.Interaction, user: discord.Member = None):
     user = user or interaction.user
     embed = discord.Embed(title=f"{user.name}'s Avatar")
-    embed.set_image(url=user.avatar.url)
+    # Use display_avatar to handle cases where user has no custom avatar
+    embed.set_image(url=user.display_avatar.url)
     await interaction.response.send_message(embed=embed)
-
 
 # /userinfo
 @bot.tree.command(name="userinfo", description="Shows info about a user")
@@ -81,63 +76,93 @@ async def userinfo(interaction: discord.Interaction, user: discord.Member = None
     embed = discord.Embed(title=f"User Info - {user.name}")
     embed.add_field(name="ID", value=user.id)
     embed.add_field(name="Top Role", value=user.top_role)
-    embed.set_thumbnail(url=user.avatar.url)
+    # Use display_avatar for consistency
+    embed.set_thumbnail(url=user.display_avatar.url)
     await interaction.response.send_message(embed=embed)
 
-
 # /clear
-@bot.tree.command(name="clear", description="Clear messages")
+@bot.tree.command(name="clear", description="Clear messages (1-100)")
 @app_commands.checks.has_permissions(manage_messages=True)
-async def clear(interaction: discord.Interaction, amount: int):
-    await interaction.channel.purge(limit=amount)
-    await interaction.response.send_message(
-        f"Cleared {amount} messages.", ephemeral=True
-    )
-
+async def clear(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 100]):
+    try:
+        deleted = await interaction.channel.purge(limit=amount)
+        await interaction.response.send_message(
+            f"Cleared {len(deleted)} messages.", ephemeral=True
+        )
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "I don't have permission to manage messages.", ephemeral=True
+        )
+    except Exception as e:
+        await interaction.response.send_message(
+            f"An error occurred: {str(e)}", ephemeral=True
+        )
 
 # /kick
 @bot.tree.command(name="kick", description="Kick a member")
 @app_commands.checks.has_permissions(kick_members=True)
 async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason"):
-    await member.kick(reason=reason)
-    await interaction.response.send_message(f"Kicked {member.name}")
-
+    if member == interaction.user:
+        await interaction.response.send_message("You can't kick yourself!", ephemeral=True)
+        return
+    if member.top_role >= interaction.user.top_role:
+        await interaction.response.send_message("You can't kick someone with a higher or equal role!", ephemeral=True)
+        return
+    try:
+        await member.kick(reason=reason)
+        await interaction.response.send_message(f"Kicked {member.name}")
+    except discord.Forbidden:
+        await interaction.response.send_message("I don't have permission to kick members.", ephemeral=True)
 
 # /ban
 @bot.tree.command(name="ban", description="Ban a member")
 @app_commands.checks.has_permissions(ban_members=True)
 async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason"):
-    await member.ban(reason=reason)
-    await interaction.response.send_message(f"Banned {member.name}")
-
+    if member == interaction.user:
+        await interaction.response.send_message("You can't ban yourself!", ephemeral=True)
+        return
+    if member.top_role >= interaction.user.top_role:
+        await interaction.response.send_message("You can't ban someone with a higher or equal role!", ephemeral=True)
+        return
+    try:
+        await member.ban(reason=reason)
+        await interaction.response.send_message(f"Banned {member.name}")
+    except discord.Forbidden:
+        await interaction.response.send_message("I don't have permission to ban members.", ephemeral=True)
 
 # /lock
 @bot.tree.command(name="lock", description="Lock this channel")
 @app_commands.checks.has_permissions(manage_channels=True)
 async def lock(interaction: discord.Interaction):
-    overwrite = interaction.channel.overwrites_for(interaction.guild.default_role)
-    overwrite.send_messages = False
-    await interaction.channel.set_permissions(interaction.guild.default_role, overwrite=overwrite)
-    await interaction.response.send_message("🔒 Channel locked")
-
+    try:
+        overwrite = interaction.channel.overwrites_for(interaction.guild.default_role)
+        overwrite.send_messages = False
+        await interaction.channel.set_permissions(interaction.guild.default_role, overwrite=overwrite)
+        await interaction.response.send_message("🔒 Channel locked")
+    except discord.Forbidden:
+        await interaction.response.send_message("I don't have permission to manage channels.", ephemeral=True)
 
 # /unlock
 @bot.tree.command(name="unlock", description="Unlock this channel")
 @app_commands.checks.has_permissions(manage_channels=True)
 async def unlock(interaction: discord.Interaction):
-    overwrite = interaction.channel.overwrites_for(interaction.guild.default_role)
-    overwrite.send_messages = True
-    await interaction.channel.set_permissions(interaction.guild.default_role, overwrite=overwrite)
-    await interaction.response.send_message("🔓 Channel unlocked")
-
+    try:
+        overwrite = interaction.channel.overwrites_for(interaction.guild.default_role)
+        overwrite.send_messages = True
+        await interaction.channel.set_permissions(interaction.guild.default_role, overwrite=overwrite)
+        await interaction.response.send_message("🔓 Channel unlocked")
+    except discord.Forbidden:
+        await interaction.response.send_message("I don't have permission to manage channels.", ephemeral=True)
 
 # /slowmode
-@bot.tree.command(name="slowmode", description="Set slowmode in this channel")
+@bot.tree.command(name="slowmode", description="Set slowmode in this channel (0-21600 seconds)")
 @app_commands.checks.has_permissions(manage_channels=True)
-async def slowmode(interaction: discord.Interaction, seconds: int):
-    await interaction.channel.edit(slowmode_delay=seconds)
-    await interaction.response.send_message(f"⏳ Slowmode set to {seconds} seconds")
-
+async def slowmode(interaction: discord.Interaction, seconds: app_commands.Range[int, 0, 21600]):
+    try:
+        await interaction.channel.edit(slowmode_delay=seconds)
+        await interaction.response.send_message(f"⏳ Slowmode set to {seconds} seconds")
+    except discord.Forbidden:
+        await interaction.response.send_message("I don't have permission to manage channels.", ephemeral=True)
 
 # /announce
 @bot.tree.command(name="announce", description="Send an announcement")
@@ -147,7 +172,6 @@ async def announce(interaction: discord.Interaction, message: str):
     embed.set_footer(text=f"By {interaction.user}")
     await interaction.response.send_message(embed=embed)
 
-
 # /setchannel
 @bot.tree.command(name="setchannel", description="Set channel for auto-chat")
 @app_commands.checks.has_permissions(administrator=True)
@@ -156,6 +180,53 @@ async def setchannel(interaction: discord.Interaction, channel: discord.TextChan
     AI_CHANNEL = channel.id
     await interaction.response.send_message(f"Auto-chat enabled in {channel.mention}")
 
+# /unsetchannel (Added for completeness)
+@bot.tree.command(name="unsetchannel", description="Disable auto-chat")
+@app_commands.checks.has_permissions(administrator=True)
+async def unsetchannel(interaction: discord.Interaction):
+    global AI_CHANNEL
+    AI_CHANNEL = None
+    await interaction.response.send_message("Auto-chat disabled.")
+
+# /mute (Added new command for muting users)
+@bot.tree.command(name="mute", description="Mute a member")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def mute(interaction: discord.Interaction, member: discord.Member, duration: int = None, reason: str = "No reason"):
+    if member == interaction.user:
+        await interaction.response.send_message("You can't mute yourself!", ephemeral=True)
+        return
+    if member.top_role >= interaction.user.top_role:
+        await interaction.response.send_message("You can't mute someone with a higher or equal role!", ephemeral=True)
+        return
+    try:
+        if duration:
+            await member.timeout(discord.utils.utcnow() + discord.timedelta(seconds=duration), reason=reason)
+            await interaction.response.send_message(f"Muted {member.name} for {duration} seconds.")
+        else:
+            await member.timeout(None, reason=reason)  # Remove timeout if no duration
+            await interaction.response.send_message(f"Unmuted {member.name}.")
+    except discord.Forbidden:
+        await interaction.response.send_message("I don't have permission to moderate members.", ephemeral=True)
+
+# /unmute (Added for unmuting)
+@bot.tree.command(name="unmute", description="Unmute a member")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def unmute(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason"):
+    try:
+        await member.timeout(None, reason=reason)
+        await interaction.response.send_message(f"Unmuted {member.name}.")
+    except discord.Forbidden:
+        await interaction.response.send_message("I don't have permission to moderate members.", ephemeral=True)
+
+# ======================
+# ERROR HANDLING FOR COMMANDS
+# ======================
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"An error occurred: {str(error)}", ephemeral=True)
 
 # ======================
 # RUN BOT
